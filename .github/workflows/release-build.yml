@@ -3,26 +3,30 @@ name: Build & Release & Update Manifest
 on:
   push:
     tags:
-      - 'v*'          # 推 v 開頭的 tag 即觸發
+      - 'v*'
 
 permissions:
-  contents: write     # 重要：讓 GITHUB_TOKEN 有建立 Release / 更新檔案權限
+  contents: write
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
+    - name: Checkout repository (tag commit)
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    - name: Show basic context
+    - name: Show context
       run: |
-        echo "Repository: ${{ github.repository }}"
-        echo "Ref (tag): ${{ github.ref }}"
-        echo "Ref name: ${{ github.ref_name }}"
+        echo "Event: ${{ github.event_name }}"
+        echo "Ref:   ${{ github.ref }}"
+        echo "Tag:   ${{ github.ref_name }}"
         echo "Actor: ${{ github.actor }}"
-        echo "Event name: ${{ github.event_name }}"
+        echo "Current HEAD: $(git rev-parse --short HEAD)"
+        echo "Branches:"
+        git branch -a
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -31,34 +35,37 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install -r requirements.txt || echo "requirements.txt 安裝警告(若不存在請建立)"
+        pip install -r requirements.txt || echo "requirements.txt missing or partial"
         pip install pyinstaller
 
     - name: Build with PyInstaller
       run: |
         VERSION=${GITHUB_REF_NAME}
-        echo "Building version: $VERSION"
-        # 如果沒有圖示，把 --icon 那行刪掉
-        pyinstaller \
-          --name excel_auto_app_${VERSION} \
-          --clean \
-          --noconfirm \
-          --add-data "assets:assets" \
-          --icon assets/icons/app.ico \
-          src/main.py
-        echo "打包後 dist 內容："
+        echo "Building version $VERSION"
+        # 如果還沒有 assets 或 icon，移除下面兩行的 --add-data / --icon 參數
+        if [ ! -d assets ]; then echo "WARNING: assets/ 不存在，將移除 --add-data"; fi
+        rm -f excel_auto_app_*.spec
+        if [ -d assets ] && [ -f assets/icons/app.ico ]; then
+          pyinstaller --name excel_auto_app_${VERSION} --clean --noconfirm \
+            --add-data "assets:assets" \
+            --icon assets/icons/app.ico \
+            src/main.py
+        else
+          pyinstaller --name excel_auto_app_${VERSION} --clean --noconfirm src/main.py
+        fi
         ls -l dist
         cd dist
         zip -r excel_auto_app_${VERSION}.zip excel_auto_app_${VERSION}
+        cd ..
 
     - name: Compute SHA256
       id: sha256
       run: |
         FILE="dist/excel_auto_app_${GITHUB_REF_NAME}.zip"
-        if [ ! -f "$FILE" ]; then echo "ZIP 未產生，終止"; exit 1; fi
+        if [ ! -f "$FILE" ]; then echo "ZIP 未產生"; exit 1; fi
         HASH=$(sha256sum "$FILE" | awk '{print $1}')
         echo "hash=$HASH" >> $GITHUB_OUTPUT
-        echo "Computed SHA256: $HASH"
+        echo "SHA256=$HASH"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
@@ -75,7 +82,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Update manifest.json
+    - name: Generate manifest.json
       run: |
         VERSION=${GITHUB_REF_NAME}
         HASH=${{ steps.sha256.outputs.hash }}
@@ -86,14 +93,15 @@ jobs:
             "url": "https://github.com/${{ github.repository }}/releases/download/${VERSION}/excel_auto_app_${VERSION}.zip",
             "sha256": "${HASH}"
           },
-            "release_notes": "自動釋出 ${VERSION}"
+          "release_notes": "自動釋出 ${VERSION}"
         }
         EOF
-        echo "manifest.json內容如下："
+        echo "----- manifest.json -----"
         cat manifest.json
 
-    - name: Commit & Push manifest
+    - name: Commit & Push manifest to main
       uses: stefanzweifel/git-auto-commit-action@v5
       with:
-        commit_message: "Update manifest for ${GITHUB_REF_NAME}"
+        branch: main
+        commit_message: "Update manifest for ${{ github.ref_name }}"
         file_pattern: manifest.json
