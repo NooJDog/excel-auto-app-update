@@ -1,38 +1,82 @@
 name: Build & Release & Update Manifest
+
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'          # 推 v 開頭的 tag 即觸發
+
+permissions:
+  contents: write     # 重要：讓 GITHUB_TOKEN 有建立 Release / 更新檔案權限
+
 jobs:
   build-release:
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Show basic context
+      run: |
+        echo "Repository: ${{ github.repository }}"
+        echo "Ref (tag): ${{ github.ref }}"
+        echo "Ref name: ${{ github.ref_name }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "Event name: ${{ github.event_name }}"
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    - run: |
-        pip install -r requirements.txt
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt || echo "requirements.txt 安裝警告(若不存在請建立)"
         pip install pyinstaller
-    - run: |
+
+    - name: Build with PyInstaller
+      run: |
         VERSION=${GITHUB_REF_NAME}
-        pyinstaller --name excel_auto_app_${VERSION} --clean --noconfirm src/main.py
+        echo "Building version: $VERSION"
+        # 如果沒有圖示，把 --icon 那行刪掉
+        pyinstaller \
+          --name excel_auto_app_${VERSION} \
+          --clean \
+          --noconfirm \
+          --add-data "assets:assets" \
+          --icon assets/icons/app.ico \
+          src/main.py
+        echo "打包後 dist 內容："
+        ls -l dist
         cd dist
         zip -r excel_auto_app_${VERSION}.zip excel_auto_app_${VERSION}
-    - id: sha256
+
+    - name: Compute SHA256
+      id: sha256
       run: |
         FILE="dist/excel_auto_app_${GITHUB_REF_NAME}.zip"
+        if [ ! -f "$FILE" ]; then echo "ZIP 未產生，終止"; exit 1; fi
         HASH=$(sha256sum "$FILE" | awk '{print $1}')
         echo "hash=$HASH" >> $GITHUB_OUTPUT
-    - uses: softprops/action-gh-release@v1
+        echo "Computed SHA256: $HASH"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: excel_auto_app ${{ github.ref_name }}
         body: |
-          自動釋出：${{ github.ref_name }}
+          自動釋出版本：${{ github.ref_name }}
           SHA256: ${{ steps.sha256.outputs.hash }}
-        files: dist/excel_auto_app_${{ github.ref_name }}.zip
-    - run: |
+        draft: false
+        prerelease: false
+        files: |
+          dist/excel_auto_app_${{ github.ref_name }}.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update manifest.json
+      run: |
         VERSION=${GITHUB_REF_NAME}
         HASH=${{ steps.sha256.outputs.hash }}
         cat > manifest.json <<EOF
@@ -42,10 +86,14 @@ jobs:
             "url": "https://github.com/${{ github.repository }}/releases/download/${VERSION}/excel_auto_app_${VERSION}.zip",
             "sha256": "${HASH}"
           },
-          "release_notes": "自動釋出 ${VERSION}"
+            "release_notes": "自動釋出 ${VERSION}"
         }
         EOF
-    - uses: stefanzweifel/git-auto-commit-action@v5
+        echo "manifest.json內容如下："
+        cat manifest.json
+
+    - name: Commit & Push manifest
+      uses: stefanzweifel/git-auto-commit-action@v5
       with:
         commit_message: "Update manifest for ${GITHUB_REF_NAME}"
         file_pattern: manifest.json
