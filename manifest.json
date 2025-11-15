@@ -1,0 +1,9 @@
+{
+  "latest_version": "1.0.0",
+  "mandatory": false,
+  "release_notes": "初始穩定版：訂單建立、付款時間修正、遠端指紋去重。",
+  "full_package": {
+    "url": "https://github.com/NooJDog/excel-auto-app-update/releases/download/v1.0.0/excel_auto_app_1.0.0.zip",
+    "sha256": "<用下方步驟換成真正的SHA256>"
+  }
+}
