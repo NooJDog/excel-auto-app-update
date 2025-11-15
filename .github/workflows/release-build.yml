@@ -1,0 +1,51 @@
+name: Build & Release & Update Manifest
+on:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - run: |
+        pip install -r requirements.txt
+        pip install pyinstaller
+    - run: |
+        VERSION=${GITHUB_REF_NAME}
+        pyinstaller --name excel_auto_app_${VERSION} --clean --noconfirm src/main.py
+        cd dist
+        zip -r excel_auto_app_${VERSION}.zip excel_auto_app_${VERSION}
+    - id: sha256
+      run: |
+        FILE="dist/excel_auto_app_${GITHUB_REF_NAME}.zip"
+        HASH=$(sha256sum "$FILE" | awk '{print $1}')
+        echo "hash=$HASH" >> $GITHUB_OUTPUT
+    - uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: excel_auto_app ${{ github.ref_name }}
+        body: |
+          自動釋出：${{ github.ref_name }}
+          SHA256: ${{ steps.sha256.outputs.hash }}
+        files: dist/excel_auto_app_${{ github.ref_name }}.zip
+    - run: |
+        VERSION=${GITHUB_REF_NAME}
+        HASH=${{ steps.sha256.outputs.hash }}
+        cat > manifest.json <<EOF
+        {
+          "latest_version": "${VERSION}",
+          "full_package": {
+            "url": "https://github.com/${{ github.repository }}/releases/download/${VERSION}/excel_auto_app_${VERSION}.zip",
+            "sha256": "${HASH}"
+          },
+          "release_notes": "自動釋出 ${VERSION}"
+        }
+        EOF
+    - uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "Update manifest for ${GITHUB_REF_NAME}"
+        file_pattern: manifest.json
